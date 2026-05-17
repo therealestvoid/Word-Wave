@@ -1,0 +1,804 @@
+// uhh make sure yk what ur doing if ur messinng with stuff here. ts has all the game logic ong literally in 1 script whic ik is bad but it is whatr it is
+
+#include <SDL.h>
+#include <SDL_ttf.h>
+#include <iostream>
+#include <vector>
+#include <string>
+#include <algorithm>
+#include <cmath>
+#include <ctime>
+#include <unordered_map>
+
+static const int   W           = 960;
+static const int   H           = 540;
+static const int   GROUND_Y    = 440;
+static const int   CEILING_Y   = 60;
+static const int   TILE        = 36;
+static const float GRAVITY     = 0.58f;
+static const float JUMP_V      = -13.5f;
+static const float SCROLL_SPD  = 4.2f;
+static const int   SENTENCE_MS = 5000;
+static const int   OBS_SPIKE_W = 30;
+static const int   OBS_SPIKE_H = 38;
+static const int   OBS_BALL_R  = 18;
+static const int   ORB_R       = 16;
+static const float ORB_JUMP_V  = -15.5f;
+
+static const SDL_Color C_BG     = {  3,  3, 14,255};
+static const SDL_Color C_GROUND = { 10, 10, 30,255};
+static const SDL_Color C_WHITE  = {255,255,255,255};
+static const SDL_Color C_GRAY   = {100,100,130,255};
+static const SDL_Color C_RED    = {255, 60, 60,255};
+static const SDL_Color C_GREEN  = { 40,220,100,255};
+static const SDL_Color C_CYAN   = {  0,215,255,255};
+static const SDL_Color C_ORANGE = {255,150,  0,255};
+static const SDL_Color C_YELLOW = {255,225, 40,255};
+static const SDL_Color C_PURPLE = {180, 60,255,255};
+
+static const std::string LEVEL_SENTENCE = "the quick brown fox jumps over the lazy dog";
+
+// obstacle/feature types
+// 0=spike  1=ball  2=platform(solid block)  3=orb(yellow)  4=gravity_portal  5=normal_portal
+struct ObsDef { float x; int type; int w,h; float y_off; };
+// y_off: for platforms = height above ground (0=on ground), for portals = screen y
+
+// Full handcrafted level — ~14000px long. its manually made bc the parser thing didnt work...
+// Platform: w=width in pixels, h=height in pixels, y_off=bottom of platform above GROUND_Y
+// Orb:      y_off = height above ground
+// Portal:   y_off = screen y of portal center
+static const std::vector<ObsDef> LEVEL_OBSTACLES = {
+    // === SECTION 1: warm-up spikes ===
+    { 900,0, 0,0, 0},
+    {1150,0, 0,0, 0},
+    {1380,0, 0,0, 0},
+    {1600,1, 0,0, 0},  // ball
+    {1850,0, 0,0, 0},
+    {2050,0, 0,0, 0},
+    {2200,0, 0,0, 0},  // tight triple
+
+    // section 2 platforms nd orbs
+    {2550,2, 120,24, 100},  // platform floats 100px above ground
+    {2550,3,   0, 0,  80},  // orb just before platform (jump into orb, land on platform)
+    {2700,0, 0,0, 0},       // spike right after platform
+    {2920,2, 80,24, 160},   // higher platform
+    {3080,3, 0,0, 120},     // orb to reach it
+    {3250,0, 0,0, 0},
+    {3420,0, 0,0, 0},
+    {3600,1, 0,0, 0},       // ball
+
+    // section 3: gravity flip shit
+    {3850,4, 0,0, 0},       // GRAVITY PORTAL — flips to ceiling
+    // now running upside-down: spikes hang from ceiling (y_off used as dist from ceiling)
+    {4050,0, 0,0, 0},       // spike (ceiling side handled in draw/collision)
+    {4250,0, 0,0, 0},
+    {4450,1, 0,0, 0},       // ball
+    {4650,3, 0,0, 120},     // orb (ceiling mode)
+    {4850,0, 0,0, 0},
+    {5000,5, 0,0, 0},       // NORMAL PORTAL — flips back
+
+    // section 4 mid-air orbs and platform
+    {5200,0, 0,0, 0},
+    {5380,0, 0,0, 0},
+    {5560,1, 0,0, 0},
+    {5750,2, 140,24, 80},   // platform
+    {5900,3,   0, 0, 60},   // orb on ground level
+    {6050,0, 0,0, 0},
+    {6220,0, 0,0, 0},
+    {6370,0, 0,0, 0},       // triple cluster
+    {6520,1, 0,0, 0},
+
+    //section 5 staircase platforms which is very tuff
+    {6750,2,  80,24,  40},
+    {6900,2,  80,24,  80},
+    {7050,2,  80,24, 120},
+    {7200,2,  80,24, 160},
+    {7200,0, 0,0, 0},       // spike guarding top step
+    {7400,3, 0,0,  80},     // orb
+    {7550,0, 0,0, 0},
+    {7700,0, 0,0, 0},
+
+    //next gravity flip
+    {7900,4, 0,0, 0},
+    {8100,0, 0,0, 0},
+    {8280,0, 0,0, 0},
+    {8460,3, 0,0, 120},
+    {8620,1, 0,0, 0},
+    {8800,0, 0,0, 0},
+    {8950,5, 0,0, 0},       // flip back
+
+    // section 7 last part
+    {9150,0, 0,0, 0},
+    {9300,0, 0,0, 0},
+    {9450,0, 0,0, 0},
+    {9630,1, 0,0, 0},
+    {9800,2, 100,24, 60},
+    {9800,3,   0, 0, 44},
+    {9980,0, 0,0, 0},
+    {10150,0,0,0, 0},
+    {10300,0,0,0, 0},
+    {10450,0,0,0, 0},
+    {10620,1,0,0, 0},
+    {10800,0,0,0, 0},
+    {10950,0,0,0, 0},
+    {11100,0,0,0, 0},       // final crazy triple ong
+};
+static const float LEVEL_LEN = 12800.f;
+
+// structs
+struct Particle { float x,y,vx,vy,size; int life,maxLife; SDL_Color col; bool isStar; };
+struct TrailPt  { float x,y; int life; };
+
+struct Obstacle {
+    float x;
+    int   groundY; // screen Y of obstacle (computed at spawn)
+    int   type;
+    float angle;   // ball spin
+    int   w,h;     // platform size
+    bool  orbUsed; // orbs can only be activated once per pass
+};
+
+struct Star { float x,y,brightness; int size; };
+
+enum class State { DISCLAIMER, SHOW_SENTENCE, PLAYING, DEAD, WIN };
+
+// texture cache
+struct TexEntry { SDL_Texture* tex; int w,h; };
+static std::unordered_map<std::string,TexEntry> s_cache;
+static void clearCache(){for(auto& kv:s_cache)SDL_DestroyTexture(kv.second.tex);s_cache.clear();}
+static TexEntry getCached(SDL_Renderer* r,TTF_Font* f,const std::string& s,SDL_Color c){
+    char buf[16];snprintf(buf,sizeof(buf),"%02x%02x%02x|",c.r,c.g,c.b);
+    std::string key=std::string(buf)+s;
+    auto it=s_cache.find(key);if(it!=s_cache.end())return it->second;
+    SDL_Surface* sur=TTF_RenderUTF8_Blended(f,s.c_str(),c);if(!sur)return{nullptr,0,0};
+    TexEntry e{SDL_CreateTextureFromSurface(r,sur),sur->w,sur->h};
+    SDL_FreeSurface(sur);s_cache[key]=e;return e;
+}
+static void drawText(SDL_Renderer* r,TTF_Font* f,const std::string& s,SDL_Color c,int cx,int cy){
+    TexEntry e=getCached(r,f,s,c);if(!e.tex)return;
+    SDL_Rect dst{cx-e.w/2,cy-e.h/2,e.w,e.h};SDL_RenderCopy(r,e.tex,nullptr,&dst);
+}
+
+// game
+struct Game {
+    State state=State::DISCLAIMER;
+    Uint32 timerStart=0;
+    std::string sentence;
+    std::vector<char> targetLetters;
+    int letterIdx=0,mistakes=0,combo=0;
+    std::vector<Obstacle> obstacles;
+    std::vector<Particle> particles;
+    std::vector<TrailPt>  trail;
+    std::vector<Star>     stars;
+    float charX=120,charY=GROUND_Y-TILE,velY=0;
+    bool  onGround=true;
+    float charAngle=0;
+    float bgScroll=0,worldOff=0;
+    float flashAlpha=0;SDL_Color flashCol={255,255,255,255};
+    float gravDir=1.f;  // 1=normal  -1=inverted
+    bool  spaceHeld=false;
+    // orb proximity trigger — track which orb the player just activated
+    int   lastOrbIdx=-1;
+};
+
+static SDL_Color lerpCol(SDL_Color a,SDL_Color b,float t){
+    return{(Uint8)(a.r+(b.r-a.r)*t),(Uint8)(a.g+(b.g-a.g)*t),(Uint8)(a.b+(b.b-a.b)*t),255};
+}
+static void fillRect(SDL_Renderer* r,int x,int y,int w,int h,SDL_Color c){
+    SDL_SetRenderDrawColor(r,c.r,c.g,c.b,c.a);SDL_Rect rc{x,y,w,h};SDL_RenderFillRect(r,&rc);}
+
+static void spawnBurst(Game& g,float x,float y,SDL_Color col,int n=10,bool stars=false){
+    for(int i=0;i<n;i++){float a=((float)rand()/RAND_MAX)*6.283f,s=2+((float)rand()/RAND_MAX)*6;
+        g.particles.push_back({x,y,cosf(a)*s,sinf(a)*s,3+((float)rand()/RAND_MAX)*5,40,40,col,stars});}
+}
+static void spawnRing(Game& g,float x,float y,SDL_Color col,int n=16){
+    for(int i=0;i<n;i++){float a=i*6.283f/n;g.particles.push_back({x,y,cosf(a)*5.f,sinf(a)*5.f,4,28,28,col,false});}
+}
+
+static void initStars(Game& g){
+    srand(12345);g.stars.clear();
+    for(int i=0;i<130;i++){Star s;s.x=(float)(rand()%W);s.y=(float)(rand()%(GROUND_Y-60));
+        s.brightness=0.3f+0.7f*(float)(rand()%100)/100;s.size=(rand()%10<2)?2:1;g.stars.push_back(s);}
+    srand((unsigned)time(nullptr));
+}
+
+static void resetLevel(Game& g){
+    g.sentence=LEVEL_SENTENCE;
+    g.targetLetters.clear();
+    for(char c:g.sentence)if(c!=' ')g.targetLetters.push_back(c);
+    g.letterIdx=g.mistakes=g.combo=0;
+    g.obstacles.clear();
+    for(const ObsDef& od:LEVEL_OBSTACLES){
+        Obstacle o;
+        o.x=od.x; o.type=od.type; o.angle=0; o.w=od.w; o.h=od.h; o.orbUsed=false;
+        // compute screen Y
+        switch(od.type){
+            case 0: o.groundY=GROUND_Y-OBS_SPIKE_H; break;
+            case 1: o.groundY=GROUND_Y-OBS_BALL_R;  break;
+            case 2: o.groundY=GROUND_Y-(int)od.y_off-od.h; break; // platform top
+            case 3: o.groundY=GROUND_Y-(int)od.y_off-ORB_R; break;
+            case 4: o.groundY=H/2; break; // portal center
+            case 5: o.groundY=H/2; break;
+            default: o.groundY=GROUND_Y-OBS_SPIKE_H;
+        }
+        g.obstacles.push_back(o);
+    }
+    g.charX=120;g.charY=GROUND_Y-TILE;g.velY=0;g.onGround=true;
+    g.charAngle=0;
+    g.bgScroll=g.worldOff=g.flashAlpha=0;
+    g.gravDir=1.f;g.spaceHeld=false;g.lastOrbIdx=-1;
+    g.particles.clear();g.trail.clear();
+    if(g.stars.empty())initStars(g);
+    g.state=State::SHOW_SENTENCE;g.timerStart=SDL_GetTicks();
+}
+
+// bg fr
+static void drawBG(SDL_Renderer* ren,const Game& g){
+    SDL_SetRenderDrawColor(ren,C_BG.r,C_BG.g,C_BG.b,255);SDL_RenderClear(ren);
+    SDL_SetRenderDrawBlendMode(ren,SDL_BLENDMODE_BLEND);
+    // nebula
+    struct Blob{float x,y,rx,ry;int r2,g2,b2;};
+    Blob blobs[]={
+        {W*0.25f+fmodf(-g.bgScroll*0.1f,(float)W*2),140,200,80,25,0,70},
+        {W*0.72f+fmodf(-g.bgScroll*0.07f,(float)W*2),100,165,60,0,30,70},
+    };
+    for(auto& bl:blobs)for(int lay=6;lay>0;lay--){
+        Uint8 a=(Uint8)(10*(7-lay));float lx=bl.rx*(float)lay/6,ly=bl.ry*(float)lay/6;
+        SDL_SetRenderDrawColor(ren,(Uint8)(bl.r2+lay*3),(Uint8)(bl.g2+lay*2),(Uint8)(bl.b2+lay*2),a);
+        for(int dy=-(int)ly;dy<=(int)ly;dy++){float fr=1-((float)(dy*dy)/(ly*ly));if(fr<0)continue;
+            int dx=(int)(lx*sqrtf(fr)),py=(int)(bl.y+dy);if(py<0||py>=GROUND_Y)continue;
+            SDL_RenderDrawLine(ren,(int)(bl.x-dx),py,(int)(bl.x+dx),py);}
+    }
+    // stars
+    for(const Star& s:g.stars){
+        float tw=0.7f+0.3f*sinf(s.x*0.05f+(float)SDL_GetTicks()*0.001f*(0.5f+s.y*0.003f));
+        Uint8 v=(Uint8)(s.brightness*tw*210);
+        SDL_SetRenderDrawColor(ren,v,v,(Uint8)std::min(255,(int)v+35),255);
+        SDL_RenderDrawPoint(ren,(int)s.x,(int)s.y);
+        if(s.size==2){SDL_RenderDrawPoint(ren,(int)s.x+1,(int)s.y);SDL_RenderDrawPoint(ren,(int)s.x,(int)s.y+1);}
+    }
+    // mountain parallax
+    float moff=fmodf(-g.bgScroll*0.25f,(float)W*2);
+    for(int mx=0;mx<W*2;mx+=2){
+        float fx=(float)((mx+(int)moff)%(W*2));
+        float top=std::min(90+55*sinf(fx*0.008f)+25*sinf(fx*0.02f),80+45*sinf(fx*0.012f+1.5f));
+        int sx=mx-(int)moff;if(sx<0||sx>=W)continue;
+        SDL_SetRenderDrawColor(ren,8,8,24,255);
+        SDL_RenderDrawLine(ren,sx,(int)(GROUND_Y-top),sx,GROUND_Y-1);
+    }
+    // grid
+    float goff=fmodf(-g.bgScroll*0.55f,90);if(goff<0)goff+=90;
+    for(float x=goff;x<W+90;x+=90){
+        SDL_SetRenderDrawColor(ren,18,18,52,45);
+        SDL_RenderDrawLineF(ren,x,0,x-65,(float)GROUND_Y);}
+    // ground
+    fillRect(ren,0,GROUND_Y,W,H-GROUND_Y,C_GROUND);
+    // ground tiles
+    float to=fmodf(-g.bgScroll,56);if(to<0)to+=56;
+    for(float x=to-56;x<W+56;x+=56){SDL_SetRenderDrawColor(ren,24,24,68,40);SDL_RenderDrawLineF(ren,x,(float)GROUND_Y,x,(float)H);}
+    // ground glow
+    for(int i=0;i<5;i++){SDL_SetRenderDrawColor(ren,C_CYAN.r,C_CYAN.g,C_CYAN.b,(Uint8)(80-i*16));SDL_RenderDrawLine(ren,0,GROUND_Y+i,W,GROUND_Y+i);}
+    // ceiling line (when inverted gravity)
+    if(g.gravDir<0){
+        for(int i=0;i<4;i++){SDL_SetRenderDrawColor(ren,C_PURPLE.r,C_PURPLE.g,C_PURPLE.b,(Uint8)(70-i*16));SDL_RenderDrawLine(ren,0,CEILING_Y+TILE-i,W,CEILING_Y+TILE-i);}
+    }
+    // progress bar
+    float prog=std::min(1.f,g.worldOff/(LEVEL_LEN-W));
+    fillRect(ren,0,H-5,W,5,{12,12,32,255});fillRect(ren,0,H-5,(int)(W*prog),5,C_CYAN);
+}
+
+// draw shit
+
+// obstacle drawing
+static void drawSpike(SDL_Renderer* ren,float x,float y,bool flipped=false){
+    int ox=(int)x,oy=(int)y;
+    SDL_SetRenderDrawBlendMode(ren,SDL_BLENDMODE_BLEND);
+    for(int gl=4;gl>0;gl--){Uint8 a=(Uint8)(18*gl);SDL_SetRenderDrawColor(ren,255,70,70,a);
+        if(!flipped){SDL_Point tri[4]={{ox+OBS_SPIKE_W/2,oy-gl},{ox-gl,oy+OBS_SPIKE_H+gl},{ox+OBS_SPIKE_W+gl,oy+OBS_SPIKE_H+gl},{ox+OBS_SPIKE_W/2,oy-gl}};SDL_RenderDrawLines(ren,tri,4);}
+        else{SDL_Point tri[4]={{ox+OBS_SPIKE_W/2,oy+OBS_SPIKE_H+gl},{ox-gl,oy-gl},{ox+OBS_SPIKE_W+gl,oy-gl},{ox+OBS_SPIKE_W/2,oy+OBS_SPIKE_H+gl}};SDL_RenderDrawLines(ren,tri,4);}
+    }
+    for(int row=0;row<OBS_SPIKE_H;row++){
+        float fr=flipped?(float)(OBS_SPIKE_H-row)/OBS_SPIKE_H:(float)row/OBS_SPIKE_H;
+        int hw=(int)(OBS_SPIKE_W*0.5f*(1-fr)),cx2=ox+OBS_SPIKE_W/2;
+        int py=flipped?oy+(OBS_SPIKE_H-row):oy+row;
+        SDL_Color col=lerpCol({255,130,90,255},{180,15,15,255},fr);
+        SDL_SetRenderDrawColor(ren,col.r,col.g,col.b,255);
+        SDL_RenderDrawLine(ren,cx2-hw,py,cx2+hw,py);
+    }
+    SDL_SetRenderDrawColor(ren,255,190,150,180);
+    if(!flipped){SDL_Point tri2[4]={{ox+OBS_SPIKE_W/2,oy},{ox,oy+OBS_SPIKE_H},{ox+OBS_SPIKE_W,oy+OBS_SPIKE_H},{ox+OBS_SPIKE_W/2,oy}};SDL_RenderDrawLines(ren,tri2,4);}
+    else{SDL_Point tri2[4]={{ox+OBS_SPIKE_W/2,oy+OBS_SPIKE_H},{ox,oy},{ox+OBS_SPIKE_W,oy},{ox+OBS_SPIKE_W/2,oy+OBS_SPIKE_H}};SDL_RenderDrawLines(ren,tri2,4);}
+}
+
+static void drawBall(SDL_Renderer* ren,float x,float y,float angle){
+    int cx=(int)x,cy=(int)y,r=OBS_BALL_R;
+    SDL_SetRenderDrawBlendMode(ren,SDL_BLENDMODE_BLEND);
+    for(int gl=5;gl>0;gl--){Uint8 a=(Uint8)(14*gl);SDL_SetRenderDrawColor(ren,255,110,25,a);int rr=r+gl;
+        for(int deg=0;deg<360;deg+=5){float rad2=deg*3.14159f/180;SDL_RenderDrawPoint(ren,cx+(int)(rr*cosf(rad2)),cy+(int)(rr*sinf(rad2)));}}
+    for(int dy=-r;dy<=r;dy++){int dx=(int)sqrtf((float)(r*r-dy*dy));
+        SDL_Color col=lerpCol({255,200,50,255},{195,65,0,255},(float)(dy+r)/(2.f*r));
+        SDL_SetRenderDrawColor(ren,col.r,col.g,col.b,255);SDL_RenderDrawLine(ren,cx-dx,cy+dy,cx+dx,cy+dy);}
+    for(int i=0;i<4;i++){float a=angle+i*3.14159f/2;SDL_SetRenderDrawColor(ren,255,255,190,170);
+        SDL_RenderDrawLine(ren,cx+(int)(r*.22f*cosf(a)),cy+(int)(r*.22f*sinf(a)),cx+(int)(r*.8f*cosf(a)),cy+(int)(r*.8f*sinf(a)));}
+}
+
+static void drawPlatform(SDL_Renderer* ren,float x,float y,int w,int h){
+    SDL_SetRenderDrawBlendMode(ren,SDL_BLENDMODE_BLEND);
+    // glow beneath
+    for(int gl=4;gl>0;gl--){Uint8 a=(Uint8)(18*gl);SDL_SetRenderDrawColor(ren,C_CYAN.r,C_CYAN.g,C_CYAN.b,a);
+        SDL_Rect gr{(int)x-gl,(int)y-gl,w+gl*2,h+gl*2};SDL_RenderDrawRect(ren,&gr);}
+    // fill gradient
+    for(int row=0;row<h;row++){float fr=(float)row/h;
+        SDL_Color col=lerpCol({40,80,120,255},{20,40,80,255},fr);
+        SDL_SetRenderDrawColor(ren,col.r,col.g,col.b,255);
+        SDL_RenderDrawLine(ren,(int)x,((int)y)+row,(int)x+w,((int)y)+row);}
+    // top edge glow
+    SDL_SetRenderDrawColor(ren,C_CYAN.r,C_CYAN.g,C_CYAN.b,200);
+    SDL_RenderDrawLine(ren,(int)x,(int)y,(int)x+w,(int)y);
+    SDL_SetRenderDrawColor(ren,C_CYAN.r,C_CYAN.g,C_CYAN.b,80);
+    SDL_RenderDrawLine(ren,(int)x,(int)y+1,(int)x+w,(int)y+1);
+    // tile marks
+    for(int tx=0;tx<w;tx+=32){SDL_SetRenderDrawColor(ren,60,100,160,80);SDL_RenderDrawLine(ren,(int)x+tx,(int)y,(int)x+tx,(int)y+h);}
+}
+
+static void drawOrb(SDL_Renderer* ren,float x,float y,bool used){
+    int cx=(int)x,cy=(int)y,r=ORB_R;
+    SDL_SetRenderDrawBlendMode(ren,SDL_BLENDMODE_BLEND);
+    Uint8 alpha=used?60:255;
+    // outer glow
+    for(int gl=6;gl>0;gl--){Uint8 a=(Uint8)((used?8:20)*gl);SDL_SetRenderDrawColor(ren,255,220,30,a);int rr=r+gl;
+        for(int deg=0;deg<360;deg+=4){float rad2=deg*3.14159f/180;SDL_RenderDrawPoint(ren,cx+(int)(rr*cosf(rad2)),cy+(int)(rr*sinf(rad2)));}}
+    // fill
+    for(int dy=-r;dy<=r;dy++){int dx=(int)sqrtf((float)(r*r-dy*dy));
+        SDL_Color col=lerpCol({255,240,80,alpha},{200,160,0,alpha},(float)(dy+r)/(2.f*r));
+        SDL_SetRenderDrawColor(ren,col.r,col.g,col.b,alpha);SDL_RenderDrawLine(ren,cx-dx,cy+dy,cx+dx,cy+dy);}
+    // star shape inside
+    if(!used){SDL_SetRenderDrawColor(ren,255,255,200,200);
+        for(int i=0;i<3;i++){float a=i*3.14159f/1.5f+(float)SDL_GetTicks()*0.002f;
+            SDL_RenderDrawLineF(ren,cx+cosf(a)*(r*.6f),cy+sinf(a)*(r*.6f),cx+cosf(a+3.14159f)*(r*.6f),cy+sinf(a+3.14159f)*(r*.6f));}}
+}
+
+static void drawPortal(SDL_Renderer* ren,float x,float y,bool isGravity){
+    SDL_SetRenderDrawBlendMode(ren,SDL_BLENDMODE_BLEND);
+    SDL_Color col=isGravity?C_PURPLE:C_CYAN;
+    int pw=22,ph=120;
+    int px=(int)x,py=(int)y-ph/2;
+    // outer glow
+    for(int gl=8;gl>0;gl--){Uint8 a=(Uint8)(16*gl);SDL_SetRenderDrawColor(ren,col.r,col.g,col.b,a);
+        SDL_Rect gr{px-gl,py-gl,pw+gl*2,ph+gl*2};SDL_RenderDrawRect(ren,&gr);}
+    // fill
+    for(int row=0;row<ph;row++){float fr=(float)row/ph;
+        SDL_Color fc=lerpCol(col,{(Uint8)(col.r/2),(Uint8)(col.g/2),(Uint8)(col.b/2),200},fr);
+        SDL_SetRenderDrawColor(ren,fc.r,fc.g,fc.b,180);
+        SDL_RenderDrawLine(ren,px,py+row,px+pw,py+row);}
+    // border
+    SDL_SetRenderDrawColor(ren,col.r,col.g,col.b,240);
+    SDL_Rect border{px,py,pw,ph};SDL_RenderDrawRect(ren,&border);
+    // arrow indicator
+    SDL_SetRenderDrawColor(ren,255,255,255,200);
+    int ay=py+ph/2;
+    if(isGravity){// down arrow (gravity flip)
+        SDL_RenderDrawLine(ren,px+pw/2,ay-8,px+pw/2,ay+8);
+        SDL_RenderDrawLine(ren,px+pw/2-5,ay+2,px+pw/2,ay+8);
+        SDL_RenderDrawLine(ren,px+pw/2+5,ay+2,px+pw/2,ay+8);
+    }else{// up arrow (normal)
+        SDL_RenderDrawLine(ren,px+pw/2,ay+8,px+pw/2,ay-8);
+        SDL_RenderDrawLine(ren,px+pw/2-5,ay-2,px+pw/2,ay-8);
+        SDL_RenderDrawLine(ren,px+pw/2+5,ay-2,px+pw/2,ay-8);
+    }
+}
+
+static void drawCube(SDL_Renderer* ren,float cx,float cy,float angle,float gravDir){
+    SDL_SetRenderDrawBlendMode(ren,SDL_BLENDMODE_BLEND);
+    float rad=angle*3.14159f/180,cosA=cosf(rad),sinA=sinf(rad),hs=TILE*0.5f;
+    // for inverted gravity, flip the cube visually
+    float sy=gravDir; (void)sy;
+    auto rot=[&](float lx,float ly,float& ox,float& oy){
+        ox=cx+lx*cosA-ly*sinA;
+        oy=cy+lx*sinA+ly*cosA;
+    };
+    float c[4][2];
+    rot(-hs,-hs,c[0][0],c[0][1]);rot(hs,-hs,c[1][0],c[1][1]);
+    rot(hs,hs,c[2][0],c[2][1]);rot(-hs,hs,c[3][0],c[3][1]);
+    // glow
+    for(int g2=6;g2>0;g2--){Uint8 a=(Uint8)(12*g2);
+        SDL_Color gc=(gravDir<0)?C_PURPLE:C_CYAN;
+        SDL_SetRenderDrawColor(ren,gc.r,gc.g,gc.b,a);
+        float hw=hs+g2,hh=hs+g2;SDL_FRect gr{cx-hw,cy-hh,hw*2,hh*2};SDL_RenderDrawRectF(ren,&gr);}
+    // fill scanline
+    float minY=c[0][1],maxY=c[0][1];
+    for(int i=1;i<4;i++){minY=std::min(minY,c[i][1]);maxY=std::max(maxY,c[i][1]);}
+    SDL_Color topCol=(gravDir<0)?SDL_Color{200,100,255,255}:SDL_Color{120,225,255,255};
+    SDL_Color botCol=(gravDir<0)?SDL_Color{100,20,180,255}:SDL_Color{25,100,195,255};
+    for(float py=minY;py<=maxY;py+=1){float xs[2];int xi=0;
+        for(int i=0;i<4;i++){float ax=c[i][0],ay=c[i][1],bx=c[(i+1)%4][0],by=c[(i+1)%4][1];
+            if((ay<=py&&by>py)||(by<=py&&ay>py)){float t=(py-ay)/(by-ay);xs[xi++]=ax+t*(bx-ax);if(xi==2)break;}}
+        if(xi==2){if(xs[0]>xs[1])std::swap(xs[0],xs[1]);
+            SDL_Color col=lerpCol(topCol,botCol,(py-minY)/(maxY-minY));
+            SDL_SetRenderDrawColor(ren,col.r,col.g,col.b,255);SDL_RenderDrawLineF(ren,xs[0],py,xs[1],py);}}
+    // outline — sharp, no anti-alias
+    SDL_SetRenderDrawColor(ren,220,248,255,255);
+    for(int i=0;i<4;i++)SDL_RenderDrawLineF(ren,c[i][0],c[i][1],c[(i+1)%4][0],c[(i+1)%4][1]);
+    // inner detail lines (GD-style)
+    float sx0,sy0,sx1,sy1,sx2,sy2,sx3,sy3;
+    rot(-hs*0.4f,-hs*0.8f,sx0,sy0);rot(hs*0.8f,-hs*0.4f,sx1,sy1);
+    rot(-hs*0.8f,hs*0.4f,sx2,sy2);rot(hs*0.4f,hs*0.8f,sx3,sy3);
+    SDL_SetRenderDrawColor(ren,255,255,255,55);
+    SDL_RenderDrawLineF(ren,sx0,sy0,sx1,sy1);
+    SDL_RenderDrawLineF(ren,sx2,sy2,sx3,sy3);
+}
+
+static void drawTrail(SDL_Renderer* ren,const std::vector<TrailPt>& trail,float gravDir){
+    SDL_SetRenderDrawBlendMode(ren,SDL_BLENDMODE_BLEND);
+    SDL_Color tc=(gravDir<0)?C_PURPLE:C_CYAN;
+    for(const TrailPt& tp:trail){float a=(float)tp.life/15;
+        SDL_SetRenderDrawColor(ren,tc.r,tc.g,tc.b,(Uint8)(90*a));
+        float s=TILE*0.25f*a;SDL_FRect r{tp.x-s/2,tp.y-s/2,s,s};SDL_RenderFillRectF(ren,&r);}
+}
+
+static void drawParticles(SDL_Renderer* ren,const std::vector<Particle>& parts){
+    SDL_SetRenderDrawBlendMode(ren,SDL_BLENDMODE_BLEND);
+    for(const Particle& p:parts){float a=(float)p.life/p.maxLife;
+        SDL_SetRenderDrawColor(ren,p.col.r,p.col.g,p.col.b,(Uint8)(255*a));float s=p.size*a;
+        if(p.isStar){SDL_RenderDrawLineF(ren,p.x,p.y-s,p.x+s,p.y);SDL_RenderDrawLineF(ren,p.x+s,p.y,p.x,p.y+s);
+            SDL_RenderDrawLineF(ren,p.x,p.y+s,p.x-s,p.y);SDL_RenderDrawLineF(ren,p.x-s,p.y,p.x,p.y-s);}
+        else{SDL_FRect r{p.x-s/2,p.y-s/2,s,s};SDL_RenderFillRectF(ren,&r);}}
+}
+
+static void drawHUD(SDL_Renderer* ren,TTF_Font* fnt,const Game& g){
+    SDL_SetRenderDrawBlendMode(ren,SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(ren,0,0,0,155);SDL_Rect bar{0,0,W,52};SDL_RenderFillRect(ren,&bar);
+    SDL_SetRenderDrawColor(ren,C_CYAN.r,C_CYAN.g,C_CYAN.b,40);SDL_RenderDrawLine(ren,0,52,W,52);
+    // just progress — sentence is hidden (player memorized it)
+    int total=(int)g.targetLetters.size();
+    std::string prog=std::to_string(g.letterIdx)+" / "+std::to_string(total);
+    drawText(ren,fnt,prog,C_WHITE,W/2,26);
+    // next key hint (small, right side)
+    if(g.letterIdx<total){char next=g.targetLetters[g.letterIdx];
+        drawText(ren,fnt,std::string("next: ")+(char)toupper(next),C_CYAN,W-80,26);}
+    if(g.mistakes>0)drawText(ren,fnt,"x"+std::to_string(g.mistakes),C_RED,40,26);
+    // gravity indicator
+    if(g.gravDir<0){drawText(ren,fnt,"[INVERTED]",C_PURPLE,W/2-160,26);}
+}
+
+static void drawCombo(SDL_Renderer* ren,TTF_Font* fnt,int combo){
+    if(combo<3)return;
+    SDL_Color col=(combo>=8)?C_YELLOW:(combo>=5?C_ORANGE:C_GREEN);
+    drawText(ren,fnt,"x"+std::to_string(combo)+(combo>=8?" PERFECT!":" COMBO!"),col,W/2,74);
+}
+
+// main
+int main(int,char**){
+    srand((unsigned)time(nullptr));
+    SDL_Init(SDL_INIT_VIDEO);TTF_Init();
+    SDL_Window* win=SDL_CreateWindow("SENTENCE DASH",SDL_WINDOWPOS_CENTERED,SDL_WINDOWPOS_CENTERED,W,H,0);
+    SDL_Renderer* ren=SDL_CreateRenderer(win,-1,SDL_RENDERER_ACCELERATED|SDL_RENDERER_PRESENTVSYNC);
+    SDL_SetRenderDrawBlendMode(ren,SDL_BLENDMODE_BLEND);
+
+    TTF_Font *fontLg=nullptr,*fontMd=nullptr,*fontSm=nullptr;
+    const std::vector<std::string> fontPaths={
+        "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/Library/Fonts/Arial.ttf",
+        "/System/Library/Fonts/Helvetica.ttc",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf"
+    };
+    for(const auto& p:fontPaths){fontLg=TTF_OpenFont(p.c_str(),26);if(fontLg){std::cout<<"Font:"<<p<<"\n";break;}}
+    if(!fontLg){std::cerr<<"No font!\n";return 1;}
+    fontMd=TTF_OpenFont(TTF_FontFaceFamilyName(fontLg),18);
+    fontSm=TTF_OpenFont(TTF_FontFaceFamilyName(fontLg),13);
+    if(!fontMd)fontMd=fontLg;if(!fontSm)fontSm=fontLg;
+
+    Game g;initStars(g);resetLevel(g);g.state=State::DISCLAIMER;
+    bool running=true;
+    Uint32 lastTime=SDL_GetTicks();
+
+    while(running){
+        Uint32 now=SDL_GetTicks();
+        lastTime=now;
+
+        // events
+        SDL_Event ev;
+        while(SDL_PollEvent(&ev)){
+            if(ev.type==SDL_QUIT)running=false;
+
+            if(g.state==State::DISCLAIMER){
+                if(ev.type==SDL_KEYDOWN||ev.type==SDL_MOUSEBUTTONDOWN)resetLevel(g);
+
+            } else if(g.state==State::PLAYING){
+                if(ev.type==SDL_KEYDOWN){
+                    // SPACE: free jump / orb activation
+                    if(ev.key.keysym.sym==SDLK_SPACE&&!g.spaceHeld){
+                        g.spaceHeld=true;
+                        // check orb proximity first
+                        bool orbActivated=false;
+                        for(int oi=0;oi<(int)g.obstacles.size();oi++){
+                            Obstacle& obs=g.obstacles[oi];
+                            if(obs.type==3&&!obs.orbUsed){
+                                float orbCX=obs.x, orbCY=(float)obs.groundY;
+                                float playerCX=g.charX+TILE/2, playerCY=g.charY+TILE/2;
+                                float dist=sqrtf((playerCX-orbCX)*(playerCX-orbCX)+(playerCY-orbCY)*(playerCY-orbCY));
+                                if(dist<ORB_R+TILE){
+                                    g.velY=ORB_JUMP_V*g.gravDir;
+                                    obs.orbUsed=true;
+                                    g.onGround=false;
+                                    spawnRing(g,orbCX,orbCY,C_YELLOW,12);
+                                    spawnBurst(g,orbCX,orbCY,C_YELLOW,8,true);
+                                    g.flashAlpha=0.12f;g.flashCol=C_YELLOW;
+                                    orbActivated=true;
+                                    break;
+                                }
+                            }
+                        }
+                        if(!orbActivated&&g.onGround){
+                            g.velY=JUMP_V*g.gravDir;
+                            g.onGround=false;
+                            spawnBurst(g,g.charX+TILE/2,
+                                g.gravDir>0?g.charY+TILE:g.charY,C_CYAN,4);
+                        }
+                    }
+                    // letter keys
+                    else if(ev.key.keysym.sym>=SDLK_a&&ev.key.keysym.sym<=SDLK_z){
+                        if(g.letterIdx<(int)g.targetLetters.size()){
+                            char pressed=(char)(ev.key.keysym.sym-SDLK_a+'a');
+                            char expected=g.targetLetters[g.letterIdx];
+                            if(pressed==expected){
+                                g.letterIdx++;g.combo++;
+                                float maxH=(g.gravDir>0)?(GROUND_Y-TILE-180.f):(float)(CEILING_Y+TILE+180);
+                                bool canJump=(g.gravDir>0)?(g.charY>maxH||g.onGround):(g.charY<maxH||g.onGround);
+                                if(canJump){g.velY=JUMP_V*g.gravDir;g.onGround=false;}
+                                SDL_Color pc=(g.combo>=8)?C_YELLOW:(g.combo>=5?C_ORANGE:C_GREEN);
+                                spawnBurst(g,g.charX+TILE/2,g.charY,pc,8,true);
+                                g.flashAlpha=0.09f;g.flashCol=C_GREEN;
+                            } else {
+                                g.letterIdx++;g.mistakes++;g.combo=0;
+                                spawnBurst(g,g.charX+TILE/2,g.charY+TILE/2,C_RED,5);
+                                g.flashAlpha=0.15f;g.flashCol=C_RED;
+                            }
+                        }
+                    }
+                }
+                if(ev.type==SDL_KEYUP&&ev.key.keysym.sym==SDLK_SPACE)g.spaceHeld=false;
+
+            } else if(g.state==State::DEAD||g.state==State::WIN){
+                if(ev.type==SDL_KEYDOWN&&ev.key.keysym.sym==SDLK_r){clearCache();resetLevel(g);}
+            }
+        }
+
+        // update
+        if(g.state==State::SHOW_SENTENCE){
+            if((int)(now-g.timerStart)>=SENTENCE_MS)g.state=State::PLAYING;
+
+        } else if(g.state==State::PLAYING){
+            // physics (fixed tick)
+            g.velY+=GRAVITY*g.gravDir;
+            g.charY+=g.velY;
+
+            // floor/ceiling
+            if(g.gravDir>0){
+                if(g.charY+TILE>=GROUND_Y){
+                    g.charY=GROUND_Y-TILE;
+                    if(!g.onGround&&g.velY>2)spawnBurst(g,g.charX+TILE/2,g.charY+TILE,C_CYAN,3);
+                    g.velY=0;g.onGround=true;
+                }
+            } else {
+                if(g.charY<=CEILING_Y){
+                    g.charY=(float)CEILING_Y;
+                    if(!g.onGround&&g.velY<-2)spawnBurst(g,g.charX+TILE/2,g.charY,C_PURPLE,3);
+                    g.velY=0;g.onGround=true;
+                }
+            }
+
+            // rotation — always spinning when airborne, snap to 90 on ground
+            if(!g.onGround) g.charAngle+=6.f*g.gravDir;
+            else{float target=roundf(g.charAngle/90)*90;g.charAngle+=(target-g.charAngle)*0.25f;}
+
+            // scroll
+            g.bgScroll-=SCROLL_SPD;g.worldOff+=SCROLL_SPD;
+            for(Obstacle& obs:g.obstacles){
+                obs.x-=SCROLL_SPD;
+                if(obs.type==1)obs.angle+=0.045f;
+            }
+
+            // trail
+            g.trail.push_back({g.charX+TILE/2,g.charY+TILE/2,15});
+            if(g.trail.size()>20)g.trail.erase(g.trail.begin());
+            for(TrailPt& tp:g.trail)tp.life--;
+            g.trail.erase(std::remove_if(g.trail.begin(),g.trail.end(),[](const TrailPt& t){return t.life<=0;}),g.trail.end());
+
+            // player hitbox (tight, GD-style)
+            float hbx=g.charX+5, hby=g.charY+5, hbw=TILE-10, hbh=TILE-10;
+
+            // obstacle interactions
+            for(int oi=0;oi<(int)g.obstacles.size();oi++){
+                Obstacle& obs=g.obstacles[oi];
+                if(obs.x<-120||obs.x>W+120)continue;
+
+                if(obs.type==0){ // spike
+                    // spike placement depends on gravity
+                    float sy=(g.gravDir>0)?(float)obs.groundY:(float)(CEILING_Y);
+                    float ox=obs.x+4,ow=OBS_SPIKE_W-8,oh=OBS_SPIKE_H-6;
+                    if(g.gravDir<0){// ceiling spike — tip points down
+                        sy=CEILING_Y; oh=OBS_SPIKE_H-6;}
+                    if(hbx<ox+ow&&hbx+hbw>ox&&hby<sy+oh&&hby+hbh>sy){
+                        goto die;}
+
+                } else if(obs.type==1){ // ball
+                    float bcx=obs.x,bcy=(float)obs.groundY;
+                    float nearX=std::max(hbx,std::min(bcx,hbx+hbw));
+                    float nearY=std::max(hby,std::min(bcy,hby+hbh));
+                    float dx2=bcx-nearX,dy2=bcy-nearY;
+                    if(dx2*dx2+dy2*dy2<(float)(OBS_BALL_R*OBS_BALL_R))goto die;
+
+                } else if(obs.type==2){ // platform — land on top
+                    float ptop=(float)obs.groundY;
+                    float pbot=ptop+obs.h;
+                    float pleft=obs.x,pright=obs.x+obs.w;
+                    if(hbx+hbw>pleft&&hbx<pright){
+                        if(g.gravDir>0){
+                            // landing on top
+                            float prevBottom=hby+hbh-g.velY;
+                            if(prevBottom<=ptop+2&&hby+hbh>=ptop){
+                                g.charY=ptop-TILE-5;
+                                if(!g.onGround&&g.velY>1)spawnBurst(g,g.charX+TILE/2,ptop,C_CYAN,3);
+                                g.velY=0;g.onGround=true;
+                            } else if(hby+hbh>ptop&&hby<pbot){ // side/bottom hit = die
+                                goto die;
+                            }
+                        } else {
+                            // inverted: land on bottom of platform
+                            float prevTop=hby-g.velY;
+                            if(prevTop>=pbot-2&&hby<=pbot){
+                                g.charY=pbot+5;
+                                if(!g.onGround&&g.velY<-1)spawnBurst(g,g.charX+TILE/2,pbot,C_PURPLE,3);
+                                g.velY=0;g.onGround=true;
+                            } else if(hby<pbot&&hby+hbh>ptop){
+                                goto die;
+                            }
+                        }
+                    }
+
+                } else if(obs.type==3){ // orb — collision only matters visually (activation via space)
+                    // no death from orb
+
+                } else if(obs.type==4){ // gravity portal
+                    if(g.gravDir>0&&hbx+hbw>obs.x&&hbx<obs.x+22){
+                        g.gravDir=-1.f;g.velY=3.f;g.onGround=false;
+                        spawnRing(g,g.charX+TILE/2,g.charY+TILE/2,C_PURPLE,20);
+                        g.flashAlpha=0.25f;g.flashCol=C_PURPLE;
+                    }
+
+                } else if(obs.type==5){ // normal portal
+                    if(g.gravDir<0&&hbx+hbw>obs.x&&hbx<obs.x+22){
+                        g.gravDir=1.f;g.velY=-3.f;g.onGround=false;
+                        spawnRing(g,g.charX+TILE/2,g.charY+TILE/2,C_CYAN,20);
+                        g.flashAlpha=0.2f;g.flashCol=C_CYAN;
+                    }
+                }
+                continue;
+                die:
+                    g.state=State::DEAD;g.timerStart=now;
+                    spawnBurst(g,g.charX+TILE/2,g.charY+TILE/2,C_RED,30,true);
+                    spawnRing(g,g.charX+TILE/2,g.charY+TILE/2,C_ORANGE);
+                    g.flashAlpha=0.65f;g.flashCol=C_RED;
+                    goto done_collision;
+            }
+            done_collision:;
+
+            // win
+            if(g.state==State::PLAYING&&g.worldOff>=LEVEL_LEN-W){
+                g.state=State::WIN;g.timerStart=now;
+                spawnRing(g,W/2,H/2,C_CYAN,32);spawnBurst(g,W/2,H/2,C_YELLOW,28,true);
+                g.flashAlpha=0.5f;g.flashCol=C_GREEN;
+            }
+            g.flashAlpha=std::max(0.f,g.flashAlpha-0.02f);
+        }
+
+        // particles (all non-menu states)
+        if(g.state!=State::DISCLAIMER&&g.state!=State::SHOW_SENTENCE){
+            for(Particle& p:g.particles){p.x+=p.vx;p.y+=p.vy;p.vy+=0.2f;p.life--;}
+            g.particles.erase(std::remove_if(g.particles.begin(),g.particles.end(),[](const Particle& p){return p.life<=0;}),g.particles.end());
+            if(g.state==State::DEAD||g.state==State::WIN)g.flashAlpha=std::max(0.f,g.flashAlpha-0.014f);
+        }
+
+        // render shit
+        drawBG(ren,g);
+
+        if(g.state==State::DISCLAIMER){
+            SDL_SetRenderDrawBlendMode(ren,SDL_BLENDMODE_BLEND);
+            SDL_SetRenderDrawColor(ren,0,0,0,190);SDL_Rect ov{0,0,W,H};SDL_RenderFillRect(ren,&ov);
+            drawText(ren,fontLg,"SENTENCE  DASH",C_CYAN,W/2,H/2-118);
+            SDL_SetRenderDrawColor(ren,C_CYAN.r,C_CYAN.g,C_CYAN.b,65);SDL_RenderDrawLine(ren,W/2-165,H/2-96,W/2+165,H/2-96);
+            drawText(ren,fontMd,"Type letters to JUMP  |  SPACE = free jump / orb",C_WHITE,W/2,H/2-65);
+            drawText(ren,fontMd,"You will MEMORIZE the sentence — it hides when you play",C_YELLOW,W/2,H/2-38);
+            drawText(ren,fontSm,"Yellow orbs: press SPACE near them to bounce",C_YELLOW,W/2,H/2+0);
+            drawText(ren,fontSm,"Solid blocks: land on top  |  side/bottom = death",C_CYAN,W/2,H/2+24);
+            drawText(ren,fontSm,"Purple portal = inverted gravity  |  Cyan = normal",C_PURPLE,W/2,H/2+48);
+            SDL_SetRenderDrawColor(ren,C_CYAN.r,C_CYAN.g,C_CYAN.b,35);SDL_RenderDrawLine(ren,W/2-200,H/2+68,W/2+200,H/2+68);
+            drawText(ren,fontSm,"\"the quick brown fox jumps over the lazy dog\"",C_CYAN,W/2,H/2+86);
+            drawText(ren,fontSm,"12 spikes · 4 balls · 7 platforms · 6 orbs · 4 portals",C_GRAY,W/2,H/2+108);
+            drawText(ren,fontMd,"Press any key to memorize",C_CYAN,W/2,H/2+152);
+
+        } else if(g.state==State::SHOW_SENTENCE){
+            SDL_SetRenderDrawBlendMode(ren,SDL_BLENDMODE_BLEND);
+            SDL_SetRenderDrawColor(ren,0,0,0,185);SDL_Rect ov{0,0,W,H};SDL_RenderFillRect(ren,&ov);
+            drawText(ren,fontMd,"MEMORIZE THIS SENTENCE",C_CYAN,W/2,H/2-80);
+            drawText(ren,fontLg,g.sentence,C_WHITE,W/2,H/2-22);
+            drawText(ren,fontSm,"It will disappear when the level starts!",C_YELLOW,W/2,H/2+22);
+            drawText(ren,fontSm,"Type each letter in order to jump over obstacles",C_GRAY,W/2,H/2+46);
+            float frac=std::max(0.f,1.f-(float)(now-g.timerStart)/SENTENCE_MS);
+            fillRect(ren,0,H-8,(int)(W*frac),8,C_CYAN);
+
+        } else if(g.state==State::PLAYING){
+            // draw all obstacles
+            for(int oi=0;oi<(int)g.obstacles.size();oi++){
+                const Obstacle& obs=g.obstacles[oi];
+                if(obs.x<-150||obs.x>W+150)continue;
+                bool flipped=(g.gravDir<0);
+                if(obs.type==0){
+                    // spikes: on ground normally, hang from ceiling when flipped
+                    float sy=flipped?(float)CEILING_Y:(float)obs.groundY;
+                    drawSpike(ren,obs.x,sy,flipped);
+                } else if(obs.type==1){
+                    drawBall(ren,obs.x,(float)obs.groundY,obs.angle);
+                } else if(obs.type==2){
+                    drawPlatform(ren,obs.x,(float)obs.groundY,obs.w,obs.h);
+                } else if(obs.type==3){
+                    drawOrb(ren,obs.x,(float)obs.groundY,obs.orbUsed);
+                } else if(obs.type==4){
+                    drawPortal(ren,obs.x,(float)obs.groundY,true);
+                } else if(obs.type==5){
+                    drawPortal(ren,obs.x,(float)obs.groundY,false);
+                }
+            }
+            drawTrail(ren,g.trail,g.gravDir);
+            drawCube(ren,g.charX+TILE/2,g.charY+TILE/2,g.charAngle,g.gravDir);
+            drawParticles(ren,g.particles);
+            drawHUD(ren,fontMd,g);
+            drawCombo(ren,fontMd,g.combo);
+            if(g.flashAlpha>0){
+                SDL_SetRenderDrawBlendMode(ren,SDL_BLENDMODE_BLEND);
+                SDL_SetRenderDrawColor(ren,g.flashCol.r,g.flashCol.g,g.flashCol.b,(Uint8)(g.flashAlpha*255));
+                SDL_Rect ov{0,0,W,H};SDL_RenderFillRect(ren,&ov);}
+
+        } else if(g.state==State::DEAD){
+            for(const Obstacle& obs:g.obstacles){if(obs.x<-150||obs.x>W+150)continue;
+                if(obs.type==0)drawSpike(ren,obs.x,(float)obs.groundY,false);
+                else if(obs.type==1)drawBall(ren,obs.x,(float)obs.groundY,obs.angle);
+                else if(obs.type==2)drawPlatform(ren,obs.x,(float)obs.groundY,obs.w,obs.h);
+                else if(obs.type==3)drawOrb(ren,obs.x,(float)obs.groundY,obs.orbUsed);}
+            drawParticles(ren,g.particles);
+            if(g.flashAlpha>0){SDL_SetRenderDrawBlendMode(ren,SDL_BLENDMODE_BLEND);
+                SDL_SetRenderDrawColor(ren,C_RED.r,C_RED.g,C_RED.b,(Uint8)(g.flashAlpha*255));
+                SDL_Rect ov{0,0,W,H};SDL_RenderFillRect(ren,&ov);}
+            SDL_SetRenderDrawBlendMode(ren,SDL_BLENDMODE_BLEND);SDL_SetRenderDrawColor(ren,0,0,0,170);
+            SDL_Rect ov{0,0,W,H};SDL_RenderFillRect(ren,&ov);
+            drawText(ren,fontLg,"YOU DIED",C_RED,W/2,H/2-80);
+            drawText(ren,fontMd,g.sentence,C_WHITE,W/2,H/2-28);
+            drawText(ren,fontSm,"Mistakes: "+std::to_string(g.mistakes)+"  |  Progress: "+std::to_string(g.letterIdx)+"/"+std::to_string((int)g.targetLetters.size()),C_GRAY,W/2,H/2+16);
+            drawText(ren,fontMd,"Press R to retry",C_CYAN,W/2,H/2+58);
+
+        } else if(g.state==State::WIN){
+            drawParticles(ren,g.particles);
+            if(g.flashAlpha>0){SDL_SetRenderDrawBlendMode(ren,SDL_BLENDMODE_BLEND);
+                SDL_SetRenderDrawColor(ren,C_GREEN.r,C_GREEN.g,C_GREEN.b,(Uint8)(g.flashAlpha*255));
+                SDL_Rect ov{0,0,W,H};SDL_RenderFillRect(ren,&ov);}
+            SDL_SetRenderDrawBlendMode(ren,SDL_BLENDMODE_BLEND);SDL_SetRenderDrawColor(ren,0,0,0,155);
+            SDL_Rect ov{0,0,W,H};SDL_RenderFillRect(ren,&ov);
+            drawText(ren,fontLg,"LEVEL COMPLETE!",C_GREEN,W/2,H/2-88);
+            drawText(ren,fontMd,g.sentence,C_CYAN,W/2,H/2-34);
+            int acc=(int)(100.f*(g.letterIdx-g.mistakes)/std::max(1,(int)g.letterIdx));
+            drawText(ren,fontMd,"Accuracy: "+std::to_string(acc)+"%",C_YELLOW,W/2,H/2+10);
+            drawText(ren,fontSm,"Mistakes: "+std::to_string(g.mistakes),C_GRAY,W/2,H/2+42);
+            drawText(ren,fontMd,"Press R to play again",C_CYAN,W/2,H/2+84);
+        }
+
+        SDL_RenderPresent(ren);
+    }
+
+    clearCache();
+    TTF_CloseFont(fontLg);if(fontMd!=fontLg)TTF_CloseFont(fontMd);if(fontSm!=fontLg)TTF_CloseFont(fontSm);
+    SDL_DestroyRenderer(ren);SDL_DestroyWindow(win);TTF_Quit();SDL_Quit();return 0;
+}
