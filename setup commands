@@ -1,0 +1,17 @@
+to setup:
+
+brew install sdl2 sdl2_ttf
+
+
+
+
+clang++ main.cpp -std=c++17 -O2
+-I/opt/homebrew/include/SDL2
+-L/opt/homebrew/lib
+-lSDL2 -lSDL2_ttf
+-o sentence_dash
+
+
+
+
+./sentence_dash
